@@ -6,6 +6,7 @@ namespace bizley\tests\standard;
 
 use bizley\jwt\Jwt;
 use bizley\jwt\JwtHttpBearerAuth;
+use bizley\tests\ConsecutiveCalls;
 use bizley\tests\stubs\TestAuthController;
 use bizley\tests\stubs\TestJwtHttpBearerAuth;
 use bizley\tests\stubs\TestStub2Controller;
@@ -267,9 +268,11 @@ class BearerTest extends TestCase
         $this->expectException(NoConstraintsGiven::class);
 
         $logger = $this->createMock(Logger::class);
-        $logger->expects(self::exactly(2))->method('log')->withConsecutive(
-            ['Route to run: test-stub2/test', 8, 'yii\base\Controller::runAction'],
-            ['No constraint given.', 2, 'JwtHttpBearerAuth']
+        $logger->expects(self::exactly(2))->method('log')->willReturnCallback(
+            new ConsecutiveCalls([
+                ['Route to run: test-stub2/test', 8, 'yii\base\Controller::runAction'],
+                ['No constraint given.', 2, 'JwtHttpBearerAuth'],
+            ], ConsecutiveCalls::NEVER)
         );
         Yii::setLogger($logger);
 
