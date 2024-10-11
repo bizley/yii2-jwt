@@ -5,25 +5,24 @@ Here is an example of using this package to secure your API.
 This package is a wrapper of the [lcobucci/jwt](https://github.com/lcobucci/jwt) so for the details of using it 
 I recommend reading [its documentation](https://lcobucci-jwt.readthedocs.io/en/latest/).
 
-I'm using here ECDSA asymmetric key with elliptic curve size 256 and a passphrase - the code of this key is `ES256`.
+I'm using here secp384r1 asymmetric key with elliptic curve size 384 and a passphrase - the code of this key is `ES384`.
 
 ## Step 1: Generating the keys
 
-On Linux run
+On your operating system, install openssl and then run the following commands to generate key pair
 
 ```sh
-ssh-keygen -t ecdsa -b 256
+openssl ecparam -name secp384r1 -genkey -noout -out jwt-private.pem
+openssl ec -in jwt-private.pem -pubout > jwt-public.pem
 ```
 
 Enter the folder where you would like your keys to be generated and the name of the key and provide the passphrase 
 (if you want). In this example I'm using passphrase `stopwars`.  
-You will get two files - one without an extension which is the private key, and one with `pub` extension which is 
+You will get two files: `jwt-private.pem` which is the private key, and `jwt-public.pem` extension which is 
 the public key (keys are different hence the type - asymmetric).  
 Place the files somewhere where they cannot be accessed through the web (IMPORTANT!) but are still readable by your 
 application. You can place them in your application structure but usually above the `web` or `public` folder - again, 
-it all depends on your server configuration.
-
-For other OS please refer to the online guides about generating SSH keys.
+it all depends on your server configuration. 
 
 ## Step 1: Configuration
 
@@ -34,7 +33,7 @@ Add `jwt` component to your configuration file:
     'components' => [
         'jwt' => [
             'class' => \bizley\jwt\Jwt::class,
-            'signer' => \bizley\jwt\Jwt::ES256,
+            'signer' => \bizley\jwt\Jwt::ES384,
             'signingKey' => [
                 'key' => '', // path to your PRIVATE key, you can start the path with @ to indicate this is a Yii alias
                 'passphrase' => 'stopwars', // omit it if you are not adding any passphrase
