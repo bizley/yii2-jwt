@@ -56,17 +56,18 @@ class JwtTools extends Component
     public $decoder;
 
     /**
-     * @var array<array<mixed>|(callable(): mixed)|string>|(callable(): mixed)|null List of constraints that
-     * will be used to validate against or an anonymous function that can be resolved as such list. The signature of
-     * the function should be `function(\bizley\jwt\JwtTools|\bizley\jwt\Jwt $jwt)` where $jwt will be an instance of
-     * this component.
+     * @var array<BaseJwt\Validation\Constraint|array<mixed>>|(callable(JwtTools): array<BaseJwt\Validation\Constraint>)|null
+     * List of constraints that will be used to validate against or an anonymous function that can be resolved as such
+     * list. The signature of the function should be `function(\bizley\jwt\JwtTools|\bizley\jwt\Jwt $jwt)` where $jwt
+     * will be an instance of this component.
      * For the constraints you can use instances of Lcobucci\JWT\Validation\Constraint or configuration arrays to be
      * resolved as such.
+     * The constraints can also be replaced at runtime with setValidationConstraints().
      */
     public $validationConstraints;
 
     /**
-     * @param array<array<mixed>|(callable(): mixed)|string> $config
+     * @param array<mixed> $config
      * @throws InvalidConfigException
      */
     private function buildObjectFromArray(array $config): object
@@ -74,10 +75,23 @@ class JwtTools extends Component
         $keys = \array_keys($config);
         if (\is_string(\reset($keys))) {
             // most probably Yii-style config
+            /** @var array{class: class-string} $config */
             return \Yii::createObject($config);
         }
 
+        /** @var array{0: class-string, 1?: array<mixed>} $config */
         return \Yii::createObject(...$config);
+    }
+
+    /**
+     * Replaces the validation constraints used by validate() and assert().
+     * This is the replacement for the deprecated `Lcobucci\JWT\Configuration::setValidationConstraints()` usage
+     * (`Yii::$app->jwt->getConfiguration()->setValidationConstraints(...)`).
+     * @since 4.2.0
+     */
+    public function setValidationConstraints(BaseJwt\Validation\Constraint ...$constraints): void
+    {
+        $this->validationConstraints = $constraints;
     }
 
     /**
@@ -148,7 +162,9 @@ class JwtTools extends Component
 
     /**
      * Returns the key based on the definition.
-     * @param string|array<string, string>|BaseJwt\Signer\Key $key
+     * Key value starting with '@' is resolved as Yii alias. For the METHOD_FILE the alias must be valid, for the other
+     * methods the value is used as is when it cannot be resolved as an alias.
+     * @param string|array<string, mixed>|BaseJwt\Signer\Key $key
      * @throws InvalidConfigException
      */
     public function buildKey($key): BaseJwt\Signer\Key
@@ -191,8 +207,11 @@ class JwtTools extends Component
         if (!\is_string($value) || $value === '') {
             throw new InvalidConfigException('Invalid key value!');
         }
-        /** @var string $value */
-        $value = \Yii::getAlias($value);
+        /** @var string|false $resolvedValue */
+        $resolvedValue = \Yii::getAlias($value, $method === Jwt::METHOD_FILE);
+        if ($resolvedValue !== false) {
+            $value = $resolvedValue;
+        }
         if ($value === '') {
             throw new InvalidConfigException('Yii alias was resolved as an invalid key value!');
         }
@@ -208,7 +227,10 @@ class JwtTools extends Component
     }
 
     /**
-     * @param string|BaseJwt\Signer $signer
+     * Returns the signer based on the definition.
+     * Signer can be provided as a signer ID (see $signers), an instance of Signer, or a configuration array that can be
+     * resolved as Signer instance (since 4.2.0).
+     * @param string|array<mixed>|BaseJwt\Signer $signer
      * @throws InvalidConfigException
      */
     public function buildSigner($signer): BaseJwt\Signer
@@ -217,18 +239,49 @@ class JwtTools extends Component
             return $signer;
         }
 
+        if (\is_array($signer)) {
+            $this->prepareSignatureConverter();
+
+            return $this->buildSignerFromArray($signer);
+        }
+
         if (!\array_key_exists($signer, $this->signers)) {
             throw new InvalidConfigException('Invalid signer ID!');
         }
 
         if (\in_array($signer, [Jwt::ES256, Jwt::ES384, Jwt::ES512], true)) {
-            \Yii::$container->set(BaseJwt\Signer\Ecdsa\SignatureConverter::class, BaseJwt\Signer\Ecdsa\MultibyteStringConverter::class);
+            $this->prepareSignatureConverter();
         }
 
-        /** @var BaseJwt\Signer $signerInstance */
-        $signerInstance = $this->buildObjectFromArray($this->signers[$signer]);
+        return $this->buildSignerFromArray($this->signers[$signer]);
+    }
 
-        return $signerInstance;
+    /**
+     * @param array<mixed> $config
+     * @throws InvalidConfigException
+     */
+    private function buildSignerFromArray(array $config): BaseJwt\Signer
+    {
+        $signer = $this->buildObjectFromArray($config);
+        if (!$signer instanceof BaseJwt\Signer) {
+            throw new InvalidConfigException('Signer configuration must resolve to an instance of Lcobucci\JWT\Signer!');
+        }
+
+        return $signer;
+    }
+
+    /**
+     * ECDSA signers require SignatureConverter to be resolvable by Yii DI container. The default converter is
+     * registered only when there is no other definition so your own converter is respected.
+     */
+    private function prepareSignatureConverter(): void
+    {
+        if (!\Yii::$container->has(BaseJwt\Signer\Ecdsa\SignatureConverter::class)) {
+            \Yii::$container->set(
+                BaseJwt\Signer\Ecdsa\SignatureConverter::class,
+                BaseJwt\Signer\Ecdsa\MultibyteStringConverter::class
+            );
+        }
     }
 
     /**
@@ -244,6 +297,7 @@ class JwtTools extends Component
                 if ($constraint instanceof BaseJwt\Validation\Constraint) {
                     $constraints[] = $constraint;
                 } else {
+                    /** @var array<mixed> $constraint */
                     /** @var BaseJwt\Validation\Constraint $constraintInstance */
                     $constraintInstance = $this->buildObjectFromArray($constraint);
                     $constraints[] = $constraintInstance;
@@ -254,7 +308,6 @@ class JwtTools extends Component
         }
 
         if (\is_callable($this->validationConstraints)) {
-            /** @phpstan-ignore-next-line */
             return \call_user_func($this->validationConstraints, $this);
         }
 

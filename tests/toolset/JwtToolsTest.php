@@ -11,6 +11,7 @@ use Lcobucci\JWT\Validation\Constraint\IdentifiedBy;
 use Lcobucci\JWT\Validation\RequiredConstraintsViolated;
 use PHPUnit\Framework\Attributes;
 use PHPUnit\Framework\TestCase;
+use yii\base\InvalidConfigException;
 
 #[Attributes\CoversClass(Jwt::class)]
 #[Attributes\CoversClass(JwtTools::class)]
@@ -128,7 +129,7 @@ class JwtToolsTest extends TestCase
         yield 'array pass' => [[Jwt::KEY => 'k', Jwt::PASSPHRASE => []], 'Invalid key passphrase!'];
         yield 'object pass' => [[Jwt::KEY => 'k', Jwt::PASSPHRASE => new \stdClass()], 'Invalid key passphrase!'];
         yield 'empty string' => [[Jwt::KEY => ''], 'Invalid key value!'];
-        yield '@' => [[Jwt::KEY => '@'], 'Invalid path alias: @'];
+        yield '@ file' => [[Jwt::KEY => '@', Jwt::METHOD => Jwt::METHOD_FILE], 'Invalid path alias: @'];
         yield 'empty alias' => [[Jwt::KEY => '@emptyString'], 'Yii alias was resolved as an invalid key value!'];
     }
 
@@ -299,6 +300,67 @@ cOJPB1eW2ny/UXZfeLwheuQfkr5grlke4Z0JiNd86CJ9NOnNIbMDl2PSj7cjMDQ=
             BaseJwt\Signer\Ecdsa\MultibyteStringConverter::class,
             \Yii::$container->get(BaseJwt\Signer\Ecdsa\SignatureConverter::class)
         );
+    }
+
+    #[Attributes\DataProvider('providerForSignerSignatureConverter')]
+    #[Attributes\Test]
+    public function customSignatureConverterIsRespected(string $signerId): void
+    {
+        $converter = $this->createStub(BaseJwt\Signer\Ecdsa\SignatureConverter::class);
+        \Yii::$container->setSingleton(BaseJwt\Signer\Ecdsa\SignatureConverter::class, $converter);
+        try {
+            $this->getJwt()->buildSigner($signerId);
+            $this->assertSame($converter, \Yii::$container->get(BaseJwt\Signer\Ecdsa\SignatureConverter::class));
+        } finally {
+            \Yii::$container->clear(BaseJwt\Signer\Ecdsa\SignatureConverter::class);
+        }
+    }
+
+    public static function providerForSignerConfigurationArrays(): iterable
+    {
+        yield 'type with params' => [[BaseJwt\Signer\Hmac\Sha384::class], BaseJwt\Signer\Hmac\Sha384::class];
+        yield 'Yii-style' => [['class' => BaseJwt\Signer\Hmac\Sha512::class], BaseJwt\Signer\Hmac\Sha512::class];
+        yield 'ECDSA' => [[BaseJwt\Signer\Ecdsa\Sha256::class], BaseJwt\Signer\Ecdsa\Sha256::class];
+    }
+
+    #[Attributes\DataProvider('providerForSignerConfigurationArrays')]
+    #[Attributes\Test]
+    public function signerFromConfigurationArray(array $config, string $expectedClass): void
+    {
+        \Yii::$container->clear(BaseJwt\Signer\Ecdsa\SignatureConverter::class);
+        self::assertInstanceOf($expectedClass, $this->getJwt()->buildSigner($config));
+    }
+
+    #[Attributes\Test]
+    public function signerConfigurationArrayNotResolvingToSigner(): void
+    {
+        $this->expectException(InvalidConfigException::class);
+        $this->expectExceptionMessage('Signer configuration must resolve to an instance of Lcobucci\JWT\Signer!');
+        $this->getJwt()->buildSigner([\stdClass::class]);
+    }
+
+    #[Attributes\Test]
+    public function invalidSignerType(): void
+    {
+        $this->expectException(InvalidConfigException::class);
+        $this->expectExceptionMessage('Invalid signer ID!');
+        $this->getJwt()->buildSigner(1);
+    }
+
+    #[Attributes\Test]
+    public function setValidationConstraintsReplacesConstraints(): void
+    {
+        $jwt = $this->getJwt();
+        $jwt->validationConstraints = [new IdentifiedBy('def')];
+        $constraint = new IdentifiedBy('abc');
+        $jwt->setValidationConstraints($constraint);
+        self::assertSame([$constraint], $jwt->validationConstraints);
+
+        $token = $jwt->getBuilder()->identifiedBy('abc')->getToken(
+            $jwt->buildSigner(Jwt::HS256),
+            $jwt->buildKey('c2VjcmV0MXNlY3JldDFzZWNyZXQxc2VjcmV0M')
+        );
+        self::assertTrue($jwt->validate($token));
     }
 
     #[Attributes\Test]

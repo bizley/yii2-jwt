@@ -77,17 +77,25 @@ pieces together.
 
 Symmetric:
 - HMAC (HS256, HS384, HS512)
+- BLAKE2B (since 3.4.0; treated as symmetric since 4.2.0, so `verifyingKey` is not required anymore)
 
 Asymmetric:
 - RSA (RS256, RS384, RS512)
 - ECDSA (ES256, ES384, ES512)
 - EdDSA (since 3.1.0)
-- BLAKE2B (since 3.4.0)
 
 Signer IDs are available as constants (like Jwt::HS256).
 
-You can also provide your own signer, either as an instance of `Lcobucci\JWT\Signer` or by adding its config to `signers` 
-and `algorithmTypes` and using its ID for `signer`.
+You can also provide your own signer:
+- as an instance of `Lcobucci\JWT\Signer`,
+- as a configuration array resolvable to `Lcobucci\JWT\Signer` instance (since 4.2.0), like 
+  `[\Lcobucci\JWT\Signer\Hmac\Sha256::class]` or `['class' => \Lcobucci\JWT\Signer\Hmac\Sha256::class]` - 
+  the signer's `algorithmId()` must be listed in `algorithmTypes`,
+- by adding its config to `signers` and `algorithmTypes` and using its ID for `signer`.
+
+ECDSA signers require `Lcobucci\JWT\Signer\Ecdsa\SignatureConverter` to be resolvable by Yii DI container. 
+`Lcobucci\JWT\Signer\Ecdsa\MultibyteStringConverter` is registered there automatically, unless you have already 
+registered your own converter (since 4.2.0).
 
 > As stated in `lcobucci/jwt` documentation: Although BLAKE2B is fantastic due to its performance, it's not JWT standard 
 > and won't necessarily be offered by other libraries.
@@ -128,6 +136,8 @@ Simple string keys are shortcuts to the following array configs:
   ]
   ```
   Detecting `@` at the beginning assumes Yii alias has been provided, so it will be resolved with `Yii::getAlias()`.
+  For `METHOD_FILE` the alias must be valid, otherwise an exception is thrown. For `METHOD_PLAIN` and `METHOD_BASE64` 
+  a key value starting with `@` that is not a valid alias is used as is (since 4.2.0).
 
 - key doesn't start with `@` nor `file://`:
   ```php
@@ -223,9 +233,9 @@ Yii::$app->jwt->assert($token);
 You **MUST** provide at least one constraint, otherwise `Lcobucci\JWT\Validation\NoConstraintsGiven` exception will be 
 thrown. There are several ways to provide constraints:
 
-- directly (Standard version only):
+- directly (since 4.2.0, it replaces the constraints configured before):
   ```php
-  Yii::$app->jwt->getConfiguration()->setValidationConstraints(/* constaints here */);
+  Yii::$app->jwt->setValidationConstraints(/* constraints here */);
   ```
 
 - through component configuration:
@@ -244,8 +254,18 @@ thrown. There are several ways to provide constraints:
   ]
   ```
 
-**Note: By default, this package is not adding any constraints out-of-the-box, you must configure them yourself like 
-in the examples above.**
+> [!WARNING]
+> By default, this package is not adding any constraints out-of-the-box, you must configure them yourself like 
+> in the examples above. **Signature is verified only when you add the `Lcobucci\JWT\Validation\Constraint\SignedWith` 
+> constraint** (or `SignedWithOneInSet` / `SignedWithUntilDate`), and expiration time is verified only with 
+> `StrictValidAt` or `LooseValidAt` constraint. Without them, any token with valid structure that matches the remaining 
+> constraints is accepted - including tokens signed with a different key or not signed at all.
+
+> [!NOTE]
+> Setting constraints with `Yii::$app->jwt->getConfiguration()->setValidationConstraints(...)` is deprecated since 
+> 4.2.0 (the method itself is deprecated since `lcobucci/jwt` 5.5), and support for it will be removed in 5.0.0. 
+> It still works and takes precedence over the component's constraints, but a warning is logged each time such 
+> constraints are used. Replace it with `Yii::$app->jwt->setValidationConstraints(...)`.
 
 ## Using component for REST authentication
 
@@ -272,7 +292,8 @@ There are special options available:
   or `bizley\jwt\JwtTools`,
 - auth - callable or `null` (default) - anonymous function with signature `function (\Lcobucci\JWT\Token $token)` that 
   should return identity of user authenticated with the JWT payload information. If $auth is not provided method 
-  `yii\web\User::loginByAccessToken()` will be called instead.
+  `yii\web\User::loginByAccessToken()` will be called instead. Since 4.2.0 an `InvalidConfigException` is thrown 
+  when a value that is not callable is provided.
 - throwException - _bool_ (default `true`) - whether the filter should throw an exception i.e. if the token has 
   an invalid format. If there are multiple auth filters (CompositeAuth) it can make sense to "silent fail" and pass 
   the validation process to the next filter on the composite auth list.

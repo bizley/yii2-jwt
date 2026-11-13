@@ -48,7 +48,7 @@ Add `jwt` component to your configuration file:
                 'key' => '...', // path to your PUBLIC key, you can start the path with @ to indicate this is a Yii alias
                 'method' => \bizley\jwt\Jwt::METHOD_FILE,
             ],
-            'validationConstraints' => static fn (\bizley\jwt\Jwt $jwt) {
+            'validationConstraints' => static function (\bizley\jwt\Jwt $jwt) {
                 $config = $jwt->getConfiguration();
                 return [
                     new \Lcobucci\JWT\Validation\Constraint\SignedWith($config->signer(), $config->verificationKey()),
@@ -145,15 +145,30 @@ This class must have `findIdentityByAccessToken` static method I will use.
 ```php
 public static function findIdentityByAccessToken($token, $type = null)
 {
-    $claims = \Yii::$app->jwt->parse($token)->claims();
-    $uid = $claims->get('uid');
+    if ($type !== \bizley\jwt\JwtHttpBearerAuth::class) {
+        // this method can be called by other authentication methods as well, i.e. when using CompositeAuth,
+        // in which case the token has not been validated yet
+        if (!\Yii::$app->jwt->validate($token)) {
+            return null;
+        }
+    }
+
+    $parsedToken = \Yii::$app->jwt->parse($token);
+    if (!$parsedToken instanceof \Lcobucci\JWT\UnencryptedToken) {
+        return null;
+    }
+    $uid = $parsedToken->claims()->get('uid');
     if (!is_numeric($uid)) {
-        throw new ForbiddenHttpException('Invalid token provided');
+        throw new \yii\web\ForbiddenHttpException('Invalid token provided');
     }
 
     return static::findOne(['id' => $uid]);
 }
 ```
+
+`JwtHttpBearerAuth` validates the token before calling this method and passes its class name as `$type`. When the 
+method is called by any other authentication method, the token must be validated here, otherwise a forged token would 
+be accepted.
 
 If the method above returns User object, `user` component uses it (`Yii::$app->user->identity`) so the application 
 further on can rely on this information and act accordingly.

@@ -79,8 +79,9 @@ class Jwt extends JwtTools
     public $verifyingKey = '';
 
     /**
-     * @var string|BaseJwt\Signer Signer ID or Signer instance to be used for signing/verifying.
-     * See $signers for available values. Since 4.0.0 it cannot be empty anymore.
+     * @var string|array<mixed>|BaseJwt\Signer Signer ID, Signer instance, or Signer configuration array (since 4.2.0)
+     * to be used for signing/verifying.
+     * See $signers for available IDs. Since 4.0.0 it cannot be empty anymore.
      * @since 3.0.0
      */
     public $signer = '';
@@ -94,6 +95,7 @@ class Jwt extends JwtTools
             self::HS256,
             self::HS384,
             self::HS512,
+            self::BLAKE2B,
         ],
         self::ASYMMETRIC => [
             self::RS256,
@@ -103,7 +105,6 @@ class Jwt extends JwtTools
             self::ES384,
             self::ES512,
             self::EDDSA,
-            self::BLAKE2B,
         ],
     ];
 
@@ -116,20 +117,18 @@ class Jwt extends JwtTools
     {
         parent::init();
 
-        $signerId = $this->signer;
-        if ($this->signer instanceof BaseJwt\Signer) {
-            $signerId = $this->signer->algorithmId();
-        }
+        $signer = $this->buildSigner($this->signer);
+        $signerId = \is_string($this->signer) ? $this->signer : $signer->algorithmId();
         if (\in_array($signerId, $this->algorithmTypes[self::SYMMETRIC], true)) {
             $this->configuration = BaseJwt\Configuration::forSymmetricSigner(
-                $this->buildSigner($this->signer),
+                $signer,
                 $this->buildKey($this->signingKey),
                 $this->prepareEncoder(),
                 $this->prepareDecoder()
             );
         } elseif (\in_array($signerId, $this->algorithmTypes[self::ASYMMETRIC], true)) {
             $this->configuration = BaseJwt\Configuration::forAsymmetricSigner(
-                $this->buildSigner($this->signer),
+                $signer,
                 $this->buildKey($this->signingKey),
                 $this->buildKey($this->verifyingKey),
                 $this->prepareEncoder(),
@@ -182,38 +181,11 @@ class Jwt extends JwtTools
     }
 
     /**
-     * This method goes through every single constraint in the set, groups all the violations, and throws an exception
-     * with the grouped violations.
-     * @param non-empty-string|BaseJwt\Token $jwt JWT string or instance of Token
-     * @throws BaseJwt\Validation\RequiredConstraintsViolated When constraint is violated
-     * @throws BaseJwt\Validation\NoConstraintsGiven When no constraints are provided
-     * @throws InvalidConfigException
-     * @since 3.0.0
-     */
-    public function assert($jwt): void
-    {
-        $configuration = $this->getConfiguration();
-        $token = $jwt instanceof BaseJwt\Token ? $jwt : $this->parse($jwt);
-        $constraints = $this->prepareValidationConstraints();
-        $configuration->validator()->assert($token, ...$constraints);
-    }
-
-    /**
-     * This method return false on first constraint violation
-     * @param non-empty-string|BaseJwt\Token $jwt JWT string or instance of Token
-     * @throws InvalidConfigException
-     * @since 3.0.0
-     */
-    public function validate($jwt): bool
-    {
-        $configuration = $this->getConfiguration();
-        $token = $jwt instanceof BaseJwt\Token ? $jwt : $this->parse($jwt);
-        $constraints = $this->prepareValidationConstraints();
-
-        return $configuration->validator()->validate($token, ...$constraints);
-    }
-
-    /**
+     * Constraints set directly in the Lcobucci configuration (with
+     * `Yii::$app->jwt->getConfiguration()->setValidationConstraints(...)`) take precedence over the component's
+     * constraints. This way of providing constraints is deprecated since 4.2.0 (the Lcobucci method itself is
+     * deprecated since lcobucci/jwt 5.5) and will be removed in 5.0.0 - use setValidationConstraints() or
+     * $validationConstraints of this component instead.
      * @return BaseJwt\Validation\Constraint[]
      * @throws InvalidConfigException
      */
@@ -221,6 +193,11 @@ class Jwt extends JwtTools
     {
         $configuredConstraints = $this->getConfiguration()->validationConstraints();
         if (!empty($configuredConstraints)) {
+            \Yii::warning(
+                'Providing validation constraints with Lcobucci\JWT\Configuration::setValidationConstraints() is deprecated since 4.2.0 and will be removed in 5.0.0. Use bizley\jwt\Jwt::setValidationConstraints() or the "validationConstraints" property instead.',
+                self::class
+            );
+
             return $configuredConstraints;
         }
 

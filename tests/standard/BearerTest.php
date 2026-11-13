@@ -71,6 +71,18 @@ class BearerTest extends TestCase
     }
 
     #[Test]
+    public function nonCallableAuth(): void
+    {
+        $this->expectException(InvalidConfigException::class);
+        $this->expectExceptionMessage('The "auth" property must be a valid callable or null!');
+
+        /* @var $controller stubs\TestAuthController */
+        $controller = \Yii::$app->createController('test-auth')[0];
+        $controller->filterConfig['auth'] = 'notExistingFunction';
+        $controller->run('filtered');
+    }
+
+    #[Test]
     public function httpBearerAuthNoHeader(): void
     {
         $this->expectException(web\UnauthorizedHttpException::class);
@@ -115,7 +127,7 @@ class BearerTest extends TestCase
 
         $now = new \DateTimeImmutable();
 
-        $this->getJwt()->getConfiguration()->setValidationConstraints(
+        $this->getJwt()->setValidationConstraints(
             new LooseValidAt(SystemClock::fromSystemTimezone())
         );
 
@@ -137,7 +149,7 @@ class BearerTest extends TestCase
     {
         $now = new \DateTimeImmutable();
 
-        $this->getJwt()->getConfiguration()->setValidationConstraints(
+        $this->getJwt()->setValidationConstraints(
             new LooseValidAt(SystemClock::fromSystemTimezone()),
             new IssuedBy('test')
         );
@@ -164,7 +176,7 @@ class BearerTest extends TestCase
     {
         $now = new \DateTimeImmutable();
 
-        $this->getJwt()->getConfiguration()->setValidationConstraints(
+        $this->getJwt()->setValidationConstraints(
             new LooseValidAt(SystemClock::fromSystemTimezone())
         );
 
@@ -197,7 +209,7 @@ class BearerTest extends TestCase
 
         $now = new \DateTimeImmutable();
 
-        $this->getJwt()->getConfiguration()->setValidationConstraints(new LooseValidAt(SystemClock::fromSystemTimezone()));
+        $this->getJwt()->setValidationConstraints(new LooseValidAt(SystemClock::fromSystemTimezone()));
 
         $token = $this->getJwt()->getBuilder()
             ->relatedTo('test')
@@ -225,7 +237,7 @@ class BearerTest extends TestCase
 
         $now = new \DateTimeImmutable();
 
-        $this->getJwt()->getConfiguration()->setValidationConstraints(new LooseValidAt(SystemClock::fromSystemTimezone()));
+        $this->getJwt()->setValidationConstraints(new LooseValidAt(SystemClock::fromSystemTimezone()));
 
         $token = $this->getJwt()->getBuilder()
             ->relatedTo('test')
