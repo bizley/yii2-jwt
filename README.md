@@ -13,6 +13,7 @@ This extension provides the [JWT](https://github.com/lcobucci/jwt) integration f
 
 | bizley/yii2-jwt | lcobucci/jwt |   php   |
 |:---------------:|:------------:|:-------:|
+|     `^4.2`      |    `^5.2`    | `>=8.1` |
 |     `^4.0`      |    `^5.0`    | `>=8.1` |
 |     `^3.0`      |    `^4.0`    | `>=7.4` |
 |     `^2.0`      |    `^3.0`    | `>=7.1` |
