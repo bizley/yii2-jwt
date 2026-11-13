@@ -74,6 +74,11 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.php }}-composer-${{ hashFiles('./composer.json') }}
           restore-keys: ${{ runner.os }}-${{ matrix.php }}-composer-
 
+      # PHP 8.1 is EOL and roave/security-advisories conflicts with it, it is still supported by this package though
+      - name: Remove security advisories for EOL PHP
+        if: matrix.php == '8.1'
+        run: composer remove --dev roave/security-advisories --no-update --no-interaction
+
       - name: Install dependencies
         run: composer update --prefer-dist --no-interaction --no-progress --optimize-autoloader
 
