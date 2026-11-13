@@ -363,6 +363,83 @@ cOJPB1eW2ny/UXZfeLwheuQfkr5grlke4Z0JiNd86CJ9NOnNIbMDl2PSj7cjMDQ=
         self::assertTrue($jwt->validate($token));
     }
 
+    private function issuedAtFromToken(JwtTools $jwt, ?BaseJwt\ClaimsFormatter $formatter = null): mixed
+    {
+        $token = $jwt->getBuilder($formatter)
+            ->issuedAt(new \DateTimeImmutable('2024-01-01 12:00:00.5', new \DateTimeZone('UTC')))
+            ->getToken(
+                $jwt->buildSigner(Jwt::HS256),
+                $jwt->buildKey('c2VjcmV0MXNlY3JldDFzZWNyZXQxc2VjcmV0M')
+            )
+            ->toString();
+
+        return \json_decode(
+            \base64_decode(\strtr(\explode('.', $token)[1], '-_', '+/')),
+            true,
+            512,
+            \JSON_THROW_ON_ERROR
+        )['iat'];
+    }
+
+    #[Attributes\Test]
+    public function defaultClaimsFormatterUsesMicroseconds(): void
+    {
+        self::assertSame(1704110400.5, $this->issuedAtFromToken($this->getJwt()));
+    }
+
+    public static function providerForClaimsFormatterConfig(): iterable
+    {
+        yield 'instance' => [BaseJwt\Encoding\ChainedFormatter::withUnixTimestampDates()];
+        yield 'configuration array' => [['class' => BaseJwt\Encoding\UnixTimestampDates::class]];
+    }
+
+    #[Attributes\DataProvider('providerForClaimsFormatterConfig')]
+    #[Attributes\Test]
+    public function configuredClaimsFormatter(BaseJwt\ClaimsFormatter|array $formatter): void
+    {
+        $toolset = new JwtTools(['claimsFormatter' => $formatter]);
+        self::assertSame(1704110400, $this->issuedAtFromToken($toolset));
+
+        $standard = new Jwt(
+            [
+                'signer' => Jwt::HS256,
+                'signingKey' => 'c2VjcmV0MXNlY3JldDFzZWNyZXQxc2VjcmV0M',
+                'claimsFormatter' => $formatter,
+            ]
+        );
+        self::assertSame(1704110400, $this->issuedAtFromToken($standard));
+    }
+
+    #[Attributes\Test]
+    public function claimsFormatterPassedDirectlyTakesPrecedence(): void
+    {
+        $config = ['claimsFormatter' => BaseJwt\Encoding\ChainedFormatter::withUnixTimestampDates()];
+        $default = BaseJwt\Encoding\ChainedFormatter::default();
+
+        self::assertSame(1704110400.5, $this->issuedAtFromToken(new JwtTools($config), $default));
+        self::assertSame(
+            1704110400.5,
+            $this->issuedAtFromToken(
+                new Jwt(
+                    \array_merge(
+                        $config,
+                        ['signer' => Jwt::HS256, 'signingKey' => 'c2VjcmV0MXNlY3JldDFzZWNyZXQxc2VjcmV0M']
+                    )
+                ),
+                $default
+            )
+        );
+    }
+
+    #[Attributes\Test]
+    public function claimsFormatterIsResolvedOnce(): void
+    {
+        $jwt = new JwtTools(['claimsFormatter' => BaseJwt\Encoding\ChainedFormatter::withUnixTimestampDates()]);
+        $this->issuedAtFromToken($jwt);
+        $jwt->claimsFormatter = BaseJwt\Encoding\ChainedFormatter::default();
+        self::assertSame(1704110400, $this->issuedAtFromToken($jwt));
+    }
+
     #[Attributes\Test]
     public function builderWithCustomClaimsFormatter(): void
     {

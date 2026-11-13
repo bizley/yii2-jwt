@@ -19,7 +19,8 @@
   },
   "require": {
     "php": ">=8.1",
-    "lcobucci/jwt": "^5.0",
+    "lcobucci/jwt": "^5.2",
+    "psr/clock": "^1.0",
     "yiisoft/yii2": ">=2.0.14 <2.1"
   },
   "require-dev": {

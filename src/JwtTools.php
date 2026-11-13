@@ -56,6 +56,17 @@ class JwtTools extends Component
     public $decoder;
 
     /**
+     * @var string|array<string, mixed>|BaseJwt\ClaimsFormatter|null Custom claims formatter used by getBuilder() when
+     * no formatter is passed to it directly.
+     * It can be component's ID, configuration array, or instance of ClaimsFormatter.
+     * When not set, Lcobucci\JWT\Encoding\ChainedFormatter::default() is used which stores dates (iat, nbf, exp) as
+     * numbers with microseconds. Use Lcobucci\JWT\Encoding\ChainedFormatter::withUnixTimestampDates() to store them as
+     * integer UNIX timestamps (better interoperability with other JWT libraries).
+     * @since 4.2.0
+     */
+    public $claimsFormatter;
+
+    /**
      * @var array<BaseJwt\Validation\Constraint|array<mixed>>|(callable(JwtTools): array<BaseJwt\Validation\Constraint>)|null
      * List of constraints that will be used to validate against or an anonymous function that can be resolved as such
      * list. The signature of the function should be `function(\bizley\jwt\JwtTools|\bizley\jwt\Jwt $jwt)` where $jwt
@@ -100,7 +111,7 @@ class JwtTools extends Component
      */
     public function getBuilder(?BaseJwt\ClaimsFormatter $claimFormatter = null): BaseJwt\Builder
     {
-        return new BaseJwt\Token\Builder($this->prepareEncoder(), $claimFormatter ?? Encoding\ChainedFormatter::default());
+        return new BaseJwt\Token\Builder($this->prepareEncoder(), $claimFormatter ?? $this->prepareClaimsFormatter());
     }
 
     /**
@@ -167,7 +178,7 @@ class JwtTools extends Component
      * @param string|array<string, mixed>|BaseJwt\Signer\Key $key
      * @throws InvalidConfigException
      */
-    public function buildKey($key): BaseJwt\Signer\Key
+    public function buildKey(#[\SensitiveParameter] $key): BaseJwt\Signer\Key
     {
         if ($key instanceof BaseJwt\Signer\Key) {
             return $key;
@@ -352,5 +363,26 @@ class JwtTools extends Component
         }
 
         return $this->builtDecoder;
+    }
+
+    private ?BaseJwt\ClaimsFormatter $builtClaimsFormatter = null;
+
+    /**
+     * @throws InvalidConfigException
+     * @since 4.2.0
+     */
+    protected function prepareClaimsFormatter(): BaseJwt\ClaimsFormatter
+    {
+        if ($this->builtClaimsFormatter === null) {
+            if ($this->claimsFormatter === null) {
+                $this->builtClaimsFormatter = Encoding\ChainedFormatter::default();
+            } else {
+                /** @var BaseJwt\ClaimsFormatter $claimsFormatter */
+                $claimsFormatter = Instance::ensure($this->claimsFormatter, BaseJwt\ClaimsFormatter::class);
+                $this->builtClaimsFormatter = $claimsFormatter;
+            }
+        }
+
+        return $this->builtClaimsFormatter;
     }
 }

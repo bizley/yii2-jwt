@@ -203,6 +203,42 @@ $tokenString = $token->toString();
 
 See https://lcobucci-jwt.readthedocs.io/en/latest/issuing-tokens/ for more info.
 
+#### Issuing helper (Standard version, since 4.2.0)
+
+`issue()` signs the token with the configured signer and signing key, and presets the issue time (`iat`), the time 
+the token can be used from (`nbf`), and the expiration time (`exp`), so you only need to add your own claims:
+
+```php
+/** @var \Lcobucci\JWT\UnencryptedToken $token */
+$token = Yii::$app->jwt->issue(
+    static fn (\Lcobucci\JWT\Builder $builder, \DateTimeImmutable $now) => $builder
+        ->issuedBy('http://example.com')
+        ->withClaim('uid', 1)
+);
+$tokenString = $token->toString();
+```
+
+`iat` and `nbf` are set to the current time, `exp` to the current time + `tokenLifetime`. You can still change them in 
+the callback. Related component options:
+- `tokenLifetime` - _string_ ISO 8601 duration or `DateInterval` instance, default `'PT5M'` (5 minutes),
+- `clock` - PSR-20 clock (component ID, configuration array, or instance of `Psr\Clock\ClockInterface`) used to get 
+  the current time, default `null` (system clock in the PHP default time zone).
+
+#### Dates format in token (since 4.2.0)
+
+By default, `lcobucci/jwt` stores dates (`iat`, `nbf`, `exp`) as numbers with microseconds (like `1704110400.5`). Some 
+JWT libraries in other languages expect integer UNIX timestamps. You can configure claims formatter used by default 
+by `getBuilder()` and `issue()`:
+
+```php
+[
+    'claimsFormatter' => \Lcobucci\JWT\Encoding\ChainedFormatter::withUnixTimestampDates(),
+]
+```
+
+It can be component ID, configuration array, or instance of `Lcobucci\JWT\ClaimsFormatter`. Formatter passed directly 
+to `getBuilder()` takes precedence.
+
 ### Parsing a token
 
 ```php
@@ -266,6 +302,38 @@ thrown. There are several ways to provide constraints:
 > 4.2.0 (the method itself is deprecated since `lcobucci/jwt` 5.5), and support for it will be removed in 5.0.0. 
 > It still works and takes precedence over the component's constraints, but a warning is logged each time such 
 > constraints are used. Replace it with `Yii::$app->jwt->setValidationConstraints(...)`.
+
+### Signature constraint and keys rotation (Standard version, since 4.2.0)
+
+`getSignedWithConstraint()` returns the constraint verifying the token signature with the configured signer and 
+verifying key, so you don't have to build it yourself:
+
+```php
+[
+    'validationConstraints' => static fn (\bizley\jwt\Jwt $jwt) => [
+        $jwt->getSignedWithConstraint(),
+        new \Lcobucci\JWT\Validation\Constraint\LooseValidAt(\Lcobucci\Clock\SystemClock::fromSystemTimezone()),
+    ],
+]
+```
+
+When you replace your keys, tokens signed with the previous key can still be accepted for some time. Add the previous 
+keys to `previousVerifyingKeys` together with the date until which each of them should be accepted:
+
+```php
+[
+    'previousVerifyingKeys' => [
+        [
+            'key' => '@app/keys/previous-public.pem', // key definition, same as for verifyingKey
+            'validUntil' => '2030-01-31 12:00:00 UTC', // string or DateTimeImmutable instance
+        ],
+    ],
+]
+```
+
+`getSignedWithConstraint()` then accepts tokens signed with the current key, or with any of the previous keys until its 
+`validUntil` date passes. It uses `clock` (see above) to get the current time. The tokens must be signed with the same 
+signer. For symmetric signers provide the previous secret keys.
 
 ## Using component for REST authentication
 
