@@ -186,6 +186,8 @@ class Jwt extends JwtTools
      * constraints. This way of providing constraints is deprecated since 4.2.0 (the Lcobucci method itself is
      * deprecated since lcobucci/jwt 5.5) and will be removed in 5.0.0 - use setValidationConstraints() or
      * $validationConstraints of this component instead.
+     * @deprecated since 4.2.0 This override exists only to support constraints set in the Lcobucci configuration and
+     * will be removed in 5.0.0 together with that support; JwtTools::prepareValidationConstraints() will be used.
      * @return BaseJwt\Validation\Constraint[]
      * @throws InvalidConfigException
      */
