@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace bizley\jwt;
 
 use Lcobucci\JWT as BaseJwt;
+use Psr\Clock\ClockInterface;
 use yii\base\InvalidConfigException;
+use yii\di\Instance;
 
 /**
  * JSON Web Token implementation based on lcobucci/jwt library v5.
@@ -41,6 +43,7 @@ class Jwt extends JwtTools
     public const KEY = 'key';
     public const METHOD = 'method';
     public const PASSPHRASE = 'passphrase';
+    public const VALID_UNTIL = 'validUntil';
 
     /**
      * @var string|array<string, string>|BaseJwt\Signer\Key Signing key definition.
@@ -79,8 +82,9 @@ class Jwt extends JwtTools
     public $verifyingKey = '';
 
     /**
-     * @var string|BaseJwt\Signer Signer ID or Signer instance to be used for signing/verifying.
-     * See $signers for available values. Since 4.0.0 it cannot be empty anymore.
+     * @var string|array<mixed>|BaseJwt\Signer Signer ID, Signer instance, or Signer configuration array (since 4.2.0)
+     * to be used for signing/verifying.
+     * See $signers for available IDs. Since 4.0.0 it cannot be empty anymore.
      * @since 3.0.0
      */
     public $signer = '';
@@ -94,6 +98,7 @@ class Jwt extends JwtTools
             self::HS256,
             self::HS384,
             self::HS512,
+            self::BLAKE2B,
         ],
         self::ASYMMETRIC => [
             self::RS256,
@@ -103,9 +108,36 @@ class Jwt extends JwtTools
             self::ES384,
             self::ES512,
             self::EDDSA,
-            self::BLAKE2B,
         ],
     ];
+
+    /**
+     * @var string|array<string, mixed>|ClockInterface|null PSR-20 clock used by issue() and getSignedWithConstraint().
+     * It can be component's ID, configuration array, or instance of ClockInterface.
+     * When not set, the system clock in the PHP default time zone is used.
+     * @since 4.2.0
+     */
+    public $clock;
+
+    /**
+     * @var string|\DateInterval Lifetime of the tokens issued with issue() - ISO 8601 duration (like 'PT5M' for
+     * 5 minutes, 'PT1H' for 1 hour) or DateInterval instance. It sets the expiration time of the token, which can still
+     * be changed in the issue() callback.
+     * @since 4.2.0
+     */
+    public $tokenLifetime = 'PT5M';
+
+    /**
+     * @var array<mixed> Previous verifying keys that should still be accepted by getSignedWithConstraint() until
+     * the specified date - useful for the keys rotation. Each element must be an array with the following keys:
+     * - 'key'        => key definition (see $signingKey for the details),
+     * - 'validUntil' => date until which the key is accepted, either DateTimeImmutable instance or string that can be
+     *                   used to create it (i.e. '2030-01-31 12:00:00', time zone is the PHP default one unless
+     *                   specified in the string).
+     * Tokens must be signed with the same signer. For symmetric signers provide the previous signing (secret) keys.
+     * @since 4.2.0
+     */
+    public array $previousVerifyingKeys = [];
 
     private ?BaseJwt\Configuration $configuration = null;
 
@@ -116,20 +148,18 @@ class Jwt extends JwtTools
     {
         parent::init();
 
-        $signerId = $this->signer;
-        if ($this->signer instanceof BaseJwt\Signer) {
-            $signerId = $this->signer->algorithmId();
-        }
+        $signer = $this->buildSigner($this->signer);
+        $signerId = \is_string($this->signer) ? $this->signer : $signer->algorithmId();
         if (\in_array($signerId, $this->algorithmTypes[self::SYMMETRIC], true)) {
             $this->configuration = BaseJwt\Configuration::forSymmetricSigner(
-                $this->buildSigner($this->signer),
+                $signer,
                 $this->buildKey($this->signingKey),
                 $this->prepareEncoder(),
                 $this->prepareDecoder()
             );
         } elseif (\in_array($signerId, $this->algorithmTypes[self::ASYMMETRIC], true)) {
             $this->configuration = BaseJwt\Configuration::forAsymmetricSigner(
-                $this->buildSigner($this->signer),
+                $signer,
                 $this->buildKey($this->signingKey),
                 $this->buildKey($this->verifyingKey),
                 $this->prepareEncoder(),
@@ -160,7 +190,7 @@ class Jwt extends JwtTools
      */
     public function getBuilder(?BaseJwt\ClaimsFormatter $claimFormatter = null): BaseJwt\Builder
     {
-        return $this->getConfiguration()->builder($claimFormatter);
+        return $this->getConfiguration()->builder($claimFormatter ?? $this->prepareClaimsFormatter());
     }
 
     /**
@@ -182,38 +212,13 @@ class Jwt extends JwtTools
     }
 
     /**
-     * This method goes through every single constraint in the set, groups all the violations, and throws an exception
-     * with the grouped violations.
-     * @param non-empty-string|BaseJwt\Token $jwt JWT string or instance of Token
-     * @throws BaseJwt\Validation\RequiredConstraintsViolated When constraint is violated
-     * @throws BaseJwt\Validation\NoConstraintsGiven When no constraints are provided
-     * @throws InvalidConfigException
-     * @since 3.0.0
-     */
-    public function assert($jwt): void
-    {
-        $configuration = $this->getConfiguration();
-        $token = $jwt instanceof BaseJwt\Token ? $jwt : $this->parse($jwt);
-        $constraints = $this->prepareValidationConstraints();
-        $configuration->validator()->assert($token, ...$constraints);
-    }
-
-    /**
-     * This method return false on first constraint violation
-     * @param non-empty-string|BaseJwt\Token $jwt JWT string or instance of Token
-     * @throws InvalidConfigException
-     * @since 3.0.0
-     */
-    public function validate($jwt): bool
-    {
-        $configuration = $this->getConfiguration();
-        $token = $jwt instanceof BaseJwt\Token ? $jwt : $this->parse($jwt);
-        $constraints = $this->prepareValidationConstraints();
-
-        return $configuration->validator()->validate($token, ...$constraints);
-    }
-
-    /**
+     * Constraints set directly in the Lcobucci configuration (with
+     * `Yii::$app->jwt->getConfiguration()->setValidationConstraints(...)`) take precedence over the component's
+     * constraints. This way of providing constraints is deprecated since 4.2.0 (the Lcobucci method itself is
+     * deprecated since lcobucci/jwt 5.5) and will be removed in 5.0.0 - use setValidationConstraints() or
+     * $validationConstraints of this component instead.
+     * @deprecated since 4.2.0 This override exists only to support constraints set in the Lcobucci configuration and
+     * will be removed in 5.0.0 together with that support; JwtTools::prepareValidationConstraints() will be used.
      * @return BaseJwt\Validation\Constraint[]
      * @throws InvalidConfigException
      */
@@ -221,9 +226,148 @@ class Jwt extends JwtTools
     {
         $configuredConstraints = $this->getConfiguration()->validationConstraints();
         if (!empty($configuredConstraints)) {
+            \Yii::warning(
+                'Providing validation constraints with Lcobucci\JWT\Configuration::setValidationConstraints() is deprecated since 4.2.0 and will be removed in 5.0.0. Use bizley\jwt\Jwt::setValidationConstraints() or the "validationConstraints" property instead.',
+                self::class
+            );
+
             return $configuredConstraints;
         }
 
         return parent::prepareValidationConstraints();
+    }
+
+    /**
+     * Issues new token signed with the configured signer and signing key.
+     * The token has already set the issue time (iat) and the time it can be used from (nbf) to the current time, and
+     * the expiration time (exp) to the current time + $tokenLifetime. The callback can add more claims and headers, and
+     * change the preset ones. Its signature is
+     * `function (\Lcobucci\JWT\Builder $builder, \DateTimeImmutable $now): \Lcobucci\JWT\Builder`
+     * where $now is the current time taken from $clock.
+     * @param \Closure(BaseJwt\Builder, \DateTimeImmutable): BaseJwt\Builder $customiseBuilder
+     * @throws InvalidConfigException
+     * @since 4.2.0
+     */
+    public function issue(\Closure $customiseBuilder): BaseJwt\UnencryptedToken
+    {
+        $configuration = $this->getConfiguration();
+        $now = $this->prepareClock()->now();
+        $builder = $this->getBuilder()
+            ->issuedAt($now)
+            ->canOnlyBeUsedAfter($now)
+            ->expiresAt($now->add($this->prepareTokenLifetime()));
+
+        return $customiseBuilder($builder, $now)->getToken($configuration->signer(), $configuration->signingKey());
+    }
+
+    /**
+     * Returns the constraint that verifies the token's signature with the configured signer and verifying key.
+     * When $previousVerifyingKeys are set, the returned constraint also accepts tokens signed with these keys until
+     * their validity dates pass.
+     * @throws InvalidConfigException
+     * @since 4.2.0
+     */
+    public function getSignedWithConstraint(): BaseJwt\Validation\SignedWith
+    {
+        $configuration = $this->getConfiguration();
+        if ($this->previousVerifyingKeys === []) {
+            return new BaseJwt\Validation\Constraint\SignedWith(
+                $configuration->signer(),
+                $configuration->verificationKey()
+            );
+        }
+
+        $clock = $this->prepareClock();
+        $constraints = [
+            new BaseJwt\Validation\Constraint\SignedWithUntilDate(
+                $configuration->signer(),
+                $configuration->verificationKey(),
+                new \DateTimeImmutable('9999-12-31 23:59:59'),
+                $clock
+            ),
+        ];
+        foreach ($this->previousVerifyingKeys as $previousKey) {
+            if (
+                !\is_array($previousKey)
+                || !\array_key_exists(self::KEY, $previousKey)
+                || !\array_key_exists(self::VALID_UNTIL, $previousKey)
+            ) {
+                throw new InvalidConfigException(
+                    'Previous verifying key must be an array with "key" and "validUntil" elements!'
+                );
+            }
+            /** @var string|array<string, mixed>|BaseJwt\Signer\Key $keyDefinition */
+            $keyDefinition = $previousKey[self::KEY];
+            $constraints[] = new BaseJwt\Validation\Constraint\SignedWithUntilDate(
+                $configuration->signer(),
+                $this->buildKey($keyDefinition),
+                $this->prepareValidUntil($previousKey[self::VALID_UNTIL]),
+                $clock
+            );
+        }
+
+        return new BaseJwt\Validation\Constraint\SignedWithOneInSet(...$constraints);
+    }
+
+    private ?ClockInterface $builtClock = null;
+
+    /**
+     * @throws InvalidConfigException
+     * @since 4.2.0
+     */
+    private function prepareClock(): ClockInterface
+    {
+        if ($this->builtClock === null) {
+            if ($this->clock === null) {
+                $this->builtClock = new class () implements ClockInterface {
+                    public function now(): \DateTimeImmutable
+                    {
+                        return new \DateTimeImmutable();
+                    }
+                };
+            } else {
+                /** @var ClockInterface $clock */
+                $clock = Instance::ensure($this->clock, ClockInterface::class);
+                $this->builtClock = $clock;
+            }
+        }
+
+        return $this->builtClock;
+    }
+
+    /**
+     * @throws InvalidConfigException
+     */
+    private function prepareTokenLifetime(): \DateInterval
+    {
+        if ($this->tokenLifetime instanceof \DateInterval) {
+            return $this->tokenLifetime;
+        }
+
+        try {
+            return new \DateInterval($this->tokenLifetime);
+        } catch (\Throwable $exception) {
+            throw new InvalidConfigException('Invalid token lifetime!', previous: $exception);
+        }
+    }
+
+    /**
+     * @throws InvalidConfigException
+     */
+    private function prepareValidUntil(mixed $validUntil): \DateTimeImmutable
+    {
+        if ($validUntil instanceof \DateTimeImmutable) {
+            return $validUntil;
+        }
+
+        if (\is_string($validUntil) && $validUntil !== '') {
+            try {
+                return new \DateTimeImmutable($validUntil);
+            } catch (\Throwable $exception) {
+                throw new InvalidConfigException('Invalid previous verifying key validity date!', previous: $exception);
+            }
+        }
+
+        throw new InvalidConfigException('Invalid previous verifying key validity date!');
     }
 }

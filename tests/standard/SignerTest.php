@@ -6,6 +6,7 @@ namespace bizley\tests\standard;
 
 use bizley\jwt\Jwt;
 use bizley\jwt\JwtTools;
+use Lcobucci\JWT\Signer\Ecdsa\Sha256 as EcdsaSha256;
 use Lcobucci\JWT\Signer\Hmac\Sha256;
 use Lcobucci\JWT\Signer\InvalidKeyProvided;
 use Lcobucci\JWT\Signer\Key\InMemory;
@@ -53,6 +54,35 @@ class SignerTest extends TestCase
                 'signingKey' => 'secret1secret1secret1secret1secret1secret1',
             ],
             Jwt::HS256
+        ];
+        yield 'Signer configuration array' => [
+            [
+                'signer' => [Sha256::class],
+                'signingKey' => 'secret1secret1secret1secret1secret1secret1',
+            ],
+            Jwt::HS256
+        ];
+        yield 'Signer Yii-style configuration array' => [
+            [
+                'signer' => ['class' => Sha256::class],
+                'signingKey' => 'secret1secret1secret1secret1secret1secret1',
+            ],
+            Jwt::HS256
+        ];
+        yield 'BLAKE2B (symmetric, no verifying key)' => [
+            [
+                'signer' => Jwt::BLAKE2B,
+                'signingKey' => 'secret1secret1secret1secret1secret1secret1',
+            ],
+            Jwt::BLAKE2B
+        ];
+        yield 'ES256 configuration array' => [
+            [
+                'signer' => [EcdsaSha256::class],
+                'signingKey' => '@bizley/tests/data/es256.key',
+                'verifyingKey' => '@bizley/tests/data/es256.key.pub',
+            ],
+            Jwt::ES256
         ];
         yield 'HS256 base64' => [
             [
@@ -208,6 +238,34 @@ class SignerTest extends TestCase
         $this->expectException(InvalidConfigException::class);
         $this->expectExceptionMessage('Invalid signer ID!');
         $this->getJwt(['signer' => 'Invalid']);
+    }
+
+    #[Attributes\Test]
+    public function customSignerIdIsCheckedAgainstAlgorithmTypes(): void
+    {
+        $jwt = $this->getJwt(
+            [
+                'signers' => ['custom' => [Sha256::class]],
+                'algorithmTypes' => [Jwt::SYMMETRIC => ['custom'], Jwt::ASYMMETRIC => []],
+                'signer' => 'custom',
+                'signingKey' => 'secret1secret1secret1secret1secret1secret1',
+            ]
+        );
+        self::assertInstanceOf(Sha256::class, $jwt->getConfiguration()->signer());
+    }
+
+    #[Attributes\Test]
+    public function signerConfigurationArrayWithUnknownAlgorithm(): void
+    {
+        $this->expectException(InvalidConfigException::class);
+        $this->expectExceptionMessage('Invalid signer ID!');
+        $this->getJwt(
+            [
+                'algorithmTypes' => [Jwt::SYMMETRIC => [], Jwt::ASYMMETRIC => []],
+                'signer' => [Sha256::class],
+                'signingKey' => 'secret1secret1secret1secret1secret1secret1',
+            ]
+        );
     }
 
     #[Attributes\Test]

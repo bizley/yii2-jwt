@@ -40,7 +40,7 @@ class JwtHttpBearerAuth extends HttpBearerAuth
     public $jwt = 'jwt';
 
     /**
-     * @var (callable(): mixed)|null anonymous function that should return identity of the user authenticated with
+     * @var (callable(Token): mixed)|null anonymous function that should return identity of the user authenticated with
      * the JWT payload information. It should have the following signature:
      *
      * ```php
@@ -69,6 +69,11 @@ class JwtHttpBearerAuth extends HttpBearerAuth
 
         if (empty($this->pattern)) {
             throw new InvalidConfigException('You must provide pattern to use to extract the HTTP authentication value!');
+        }
+        // the property's type comes from PHPDoc only, so the actual configured value must be verified here
+        // @phpstan-ignore booleanAnd.alwaysFalse, booleanNot.alwaysFalse
+        if ($this->auth !== null && !\is_callable($this->auth)) {
+            throw new InvalidConfigException('The "auth" property must be a valid callable or null!');
         }
     }
 
@@ -126,7 +131,7 @@ class JwtHttpBearerAuth extends HttpBearerAuth
         }
 
         if ($token !== null) {
-            if (\is_callable($this->auth, true)) {
+            if ($this->auth !== null) {
                 $identity = \call_user_func($this->auth, $token);
             } else {
                 $identity = $user->loginByAccessToken($token->toString(), \get_class($this));

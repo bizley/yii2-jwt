@@ -19,13 +19,14 @@
   },
   "require": {
     "php": ">=8.1",
-    "lcobucci/jwt": "^5.0",
+    "lcobucci/jwt": "^5.2",
+    "psr/clock": "^1.0",
     "yiisoft/yii2": ">=2.0.14 <2.1"
   },
   "require-dev": {
-    "infection/infection": "*",
+    "infection/infection": ">=0.27 <1.0",
     "lcobucci/clock": "^3.0",
-    "phpstan/phpstan": "*",
+    "phpstan/phpstan": "^2.0",
     "phpunit/phpunit": "^10.5",
     "roave/security-advisories": "dev-latest"
   },

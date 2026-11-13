@@ -13,6 +13,7 @@ This extension provides the [JWT](https://github.com/lcobucci/jwt) integration f
 
 | bizley/yii2-jwt | lcobucci/jwt |   php   |
 |:---------------:|:------------:|:-------:|
+|     `^4.2`      |    `^5.2`    | `>=8.1` |
 |     `^4.0`      |    `^5.0`    | `>=8.1` |
 |     `^3.0`      |    `^4.0`    | `>=7.4` |
 |     `^2.0`      |    `^3.0`    | `>=7.1` |
@@ -77,17 +78,25 @@ pieces together.
 
 Symmetric:
 - HMAC (HS256, HS384, HS512)
+- BLAKE2B (since 3.4.0; treated as symmetric since 4.2.0, so `verifyingKey` is not required anymore)
 
 Asymmetric:
 - RSA (RS256, RS384, RS512)
 - ECDSA (ES256, ES384, ES512)
 - EdDSA (since 3.1.0)
-- BLAKE2B (since 3.4.0)
 
 Signer IDs are available as constants (like Jwt::HS256).
 
-You can also provide your own signer, either as an instance of `Lcobucci\JWT\Signer` or by adding its config to `signers` 
-and `algorithmTypes` and using its ID for `signer`.
+You can also provide your own signer:
+- as an instance of `Lcobucci\JWT\Signer`,
+- as a configuration array resolvable to `Lcobucci\JWT\Signer` instance (since 4.2.0), like 
+  `[\Lcobucci\JWT\Signer\Hmac\Sha256::class]` or `['class' => \Lcobucci\JWT\Signer\Hmac\Sha256::class]` - 
+  the signer's `algorithmId()` must be listed in `algorithmTypes`,
+- by adding its config to `signers` and `algorithmTypes` and using its ID for `signer`.
+
+ECDSA signers require `Lcobucci\JWT\Signer\Ecdsa\SignatureConverter` to be resolvable by Yii DI container. 
+`Lcobucci\JWT\Signer\Ecdsa\MultibyteStringConverter` is registered there automatically, unless you have already 
+registered your own converter (since 4.2.0).
 
 > As stated in `lcobucci/jwt` documentation: Although BLAKE2B is fantastic due to its performance, it's not JWT standard 
 > and won't necessarily be offered by other libraries.
@@ -128,6 +137,8 @@ Simple string keys are shortcuts to the following array configs:
   ]
   ```
   Detecting `@` at the beginning assumes Yii alias has been provided, so it will be resolved with `Yii::getAlias()`.
+  For `METHOD_FILE` the alias must be valid, otherwise an exception is thrown. For `METHOD_PLAIN` and `METHOD_BASE64` 
+  a key value starting with `@` that is not a valid alias is used as is (since 4.2.0).
 
 - key doesn't start with `@` nor `file://`:
   ```php
@@ -193,6 +204,42 @@ $tokenString = $token->toString();
 
 See https://lcobucci-jwt.readthedocs.io/en/latest/issuing-tokens/ for more info.
 
+#### Issuing helper (Standard version, since 4.2.0)
+
+`issue()` signs the token with the configured signer and signing key, and presets the issue time (`iat`), the time 
+the token can be used from (`nbf`), and the expiration time (`exp`), so you only need to add your own claims:
+
+```php
+/** @var \Lcobucci\JWT\UnencryptedToken $token */
+$token = Yii::$app->jwt->issue(
+    static fn (\Lcobucci\JWT\Builder $builder, \DateTimeImmutable $now) => $builder
+        ->issuedBy('http://example.com')
+        ->withClaim('uid', 1)
+);
+$tokenString = $token->toString();
+```
+
+`iat` and `nbf` are set to the current time, `exp` to the current time + `tokenLifetime`. You can still change them in 
+the callback. Related component options:
+- `tokenLifetime` - _string_ ISO 8601 duration or `DateInterval` instance, default `'PT5M'` (5 minutes),
+- `clock` - PSR-20 clock (component ID, configuration array, or instance of `Psr\Clock\ClockInterface`) used to get 
+  the current time, default `null` (system clock in the PHP default time zone).
+
+#### Dates format in token (since 4.2.0)
+
+By default, `lcobucci/jwt` stores dates (`iat`, `nbf`, `exp`) as numbers with microseconds (like `1704110400.5`). Some 
+JWT libraries in other languages expect integer UNIX timestamps. You can configure claims formatter used by default 
+by `getBuilder()` and `issue()`:
+
+```php
+[
+    'claimsFormatter' => \Lcobucci\JWT\Encoding\ChainedFormatter::withUnixTimestampDates(),
+]
+```
+
+It can be component ID, configuration array, or instance of `Lcobucci\JWT\ClaimsFormatter`. Formatter passed directly 
+to `getBuilder()` takes precedence.
+
 ### Parsing a token
 
 ```php
@@ -223,9 +270,9 @@ Yii::$app->jwt->assert($token);
 You **MUST** provide at least one constraint, otherwise `Lcobucci\JWT\Validation\NoConstraintsGiven` exception will be 
 thrown. There are several ways to provide constraints:
 
-- directly (Standard version only):
+- directly (since 4.2.0, it replaces the constraints configured before):
   ```php
-  Yii::$app->jwt->getConfiguration()->setValidationConstraints(/* constaints here */);
+  Yii::$app->jwt->setValidationConstraints(/* constraints here */);
   ```
 
 - through component configuration:
@@ -244,8 +291,50 @@ thrown. There are several ways to provide constraints:
   ]
   ```
 
-**Note: By default, this package is not adding any constraints out-of-the-box, you must configure them yourself like 
-in the examples above.**
+> [!WARNING]
+> By default, this package is not adding any constraints out-of-the-box, you must configure them yourself like 
+> in the examples above. **Signature is verified only when you add the `Lcobucci\JWT\Validation\Constraint\SignedWith` 
+> constraint** (or `SignedWithOneInSet` / `SignedWithUntilDate`), and expiration time is verified only with 
+> `StrictValidAt` or `LooseValidAt` constraint. Without them, any token with valid structure that matches the remaining 
+> constraints is accepted - including tokens signed with a different key or not signed at all.
+
+> [!NOTE]
+> Setting constraints with `Yii::$app->jwt->getConfiguration()->setValidationConstraints(...)` is deprecated since 
+> 4.2.0 (the method itself is deprecated since `lcobucci/jwt` 5.5), and support for it will be removed in 5.0.0. 
+> It still works and takes precedence over the component's constraints, but a warning is logged each time such 
+> constraints are used. Replace it with `Yii::$app->jwt->setValidationConstraints(...)`.
+
+### Signature constraint and keys rotation (Standard version, since 4.2.0)
+
+`getSignedWithConstraint()` returns the constraint verifying the token signature with the configured signer and 
+verifying key, so you don't have to build it yourself:
+
+```php
+[
+    'validationConstraints' => static fn (\bizley\jwt\Jwt $jwt) => [
+        $jwt->getSignedWithConstraint(),
+        new \Lcobucci\JWT\Validation\Constraint\LooseValidAt(\Lcobucci\Clock\SystemClock::fromSystemTimezone()),
+    ],
+]
+```
+
+When you replace your keys, tokens signed with the previous key can still be accepted for some time. Add the previous 
+keys to `previousVerifyingKeys` together with the date until which each of them should be accepted:
+
+```php
+[
+    'previousVerifyingKeys' => [
+        [
+            'key' => '@app/keys/previous-public.pem', // key definition, same as for verifyingKey
+            'validUntil' => '2030-01-31 12:00:00 UTC', // string or DateTimeImmutable instance
+        ],
+    ],
+]
+```
+
+`getSignedWithConstraint()` then accepts tokens signed with the current key, or with any of the previous keys until its 
+`validUntil` date passes. It uses `clock` (see above) to get the current time. The tokens must be signed with the same 
+signer. For symmetric signers provide the previous secret keys.
 
 ## Using component for REST authentication
 
@@ -272,7 +361,8 @@ There are special options available:
   or `bizley\jwt\JwtTools`,
 - auth - callable or `null` (default) - anonymous function with signature `function (\Lcobucci\JWT\Token $token)` that 
   should return identity of user authenticated with the JWT payload information. If $auth is not provided method 
-  `yii\web\User::loginByAccessToken()` will be called instead.
+  `yii\web\User::loginByAccessToken()` will be called instead. Since 4.2.0 an `InvalidConfigException` is thrown 
+  when a value that is not callable is provided.
 - throwException - _bool_ (default `true`) - whether the filter should throw an exception i.e. if the token has 
   an invalid format. If there are multiple auth filters (CompositeAuth) it can make sense to "silent fail" and pass 
   the validation process to the next filter on the composite auth list.

@@ -48,12 +48,13 @@ Add `jwt` component to your configuration file:
                 'key' => '...', // path to your PUBLIC key, you can start the path with @ to indicate this is a Yii alias
                 'method' => \bizley\jwt\Jwt::METHOD_FILE,
             ],
-            'validationConstraints' => static fn (\bizley\jwt\Jwt $jwt) {
-                $config = $jwt->getConfiguration();
+            'clock' => new \Lcobucci\Clock\SystemClock(new \DateTimeZone('UTC')),
+            'tokenLifetime' => 'PT1H', // tokens issued with issue() expire after 1 hour
+            'validationConstraints' => static function (\bizley\jwt\Jwt $jwt) {
                 return [
-                    new \Lcobucci\JWT\Validation\Constraint\SignedWith($config->signer(), $config->verificationKey()),
+                    $jwt->getSignedWithConstraint(),
                     new \Lcobucci\JWT\Validation\Constraint\LooseValidAt(
-                        new \Lcobucci\Clock\SystemClock(new \DateTimeZone(\Yii::$app->timeZone)),
+                        new \Lcobucci\Clock\SystemClock(new \DateTimeZone('UTC')),
                         new \DateInterval('PT10S')
                     ),
                 ];
@@ -64,10 +65,12 @@ Add `jwt` component to your configuration file:
 ```
 
 Validation constraints used here are:
- - `SignedWith` - this will make sure that received token is indeed signed with the chosen signer and can be verified 
-   with the provided verification key,
+ - `SignedWith` (returned by `getSignedWithConstraint()`) - this will make sure that received token is indeed signed 
+   with the chosen signer and can be verified with the provided verification key,
  - `LooseValidAt` - this will make sure that token is not expired yet allowing 10 seconds leeway (in case of some delays
-   between the server and the client), we are here also setting the same time zone that is used in the application.
+   between the server and the client).
+
+The `clock` option sets the clock used when issuing tokens with `issue()`.
 
 *NOTE*: The above implementation requires to install `lcobucci/clock` library first (run `composer req lcobucci/clock`).
 If you prefer other PSR-20 clock implementation you must change the above `\Lcobucci\Clock\SystemClock()` usage.
@@ -87,23 +90,15 @@ the token and return it to the user.
 We can generate new token with:
 
 ```php
-$now = new \DateTimeImmutable('now', new \DateTimeZone(\Yii::$app->timeZone));
-$token = \Yii::$app->jwt->getBuilder()
-    // Configures the time that the token was issued
-    ->issuedAt($now)
-    // Configures the time that the token can be used
-    ->canOnlyBeUsedAfter($now)
-    // Configures the expiration time of the token
-    ->expiresAt($now->modify('+1 hour'))
+$token = \Yii::$app->jwt->issue(
     // Configures a new claim, called "uid", with user ID, assuming $user is the authenticated user object
-    ->withClaim('uid', $user->id)
-    // Builds a new token
-    ->getToken(
-        \Yii::$app->jwt->getConfiguration()->signer(),
-        \Yii::$app->jwt->getConfiguration()->signingKey()
-    );
+    static fn (\Lcobucci\JWT\Builder $builder) => $builder->withClaim('uid', $user->id)
+);
 $tokenString = $token->toString();
 ```
+
+`issue()` signs the token with the configured signer and signing key, sets the time the token was issued and the time 
+it can be used from to the current time, and the expiration time to the current time + `tokenLifetime` (1 hour here).
 
 Now it's a matter of returning this value back to the client, for example:
 
@@ -145,15 +140,30 @@ This class must have `findIdentityByAccessToken` static method I will use.
 ```php
 public static function findIdentityByAccessToken($token, $type = null)
 {
-    $claims = \Yii::$app->jwt->parse($token)->claims();
-    $uid = $claims->get('uid');
+    if ($type !== \bizley\jwt\JwtHttpBearerAuth::class) {
+        // this method can be called by other authentication methods as well, i.e. when using CompositeAuth,
+        // in which case the token has not been validated yet
+        if (!\Yii::$app->jwt->validate($token)) {
+            return null;
+        }
+    }
+
+    $parsedToken = \Yii::$app->jwt->parse($token);
+    if (!$parsedToken instanceof \Lcobucci\JWT\UnencryptedToken) {
+        return null;
+    }
+    $uid = $parsedToken->claims()->get('uid');
     if (!is_numeric($uid)) {
-        throw new ForbiddenHttpException('Invalid token provided');
+        throw new \yii\web\ForbiddenHttpException('Invalid token provided');
     }
 
     return static::findOne(['id' => $uid]);
 }
 ```
+
+`JwtHttpBearerAuth` validates the token before calling this method and passes its class name as `$type`. When the 
+method is called by any other authentication method, the token must be validated here, otherwise a forged token would 
+be accepted.
 
 If the method above returns User object, `user` component uses it (`Yii::$app->user->identity`) so the application 
 further on can rely on this information and act accordingly.
